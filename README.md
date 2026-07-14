@@ -1,66 +1,97 @@
 # Tessy Link
 
-Use your Tesla's touchscreen (or any device with a web browser) as a wireless
-**extended monitor** for your Mac — free, no hardware, no cables. A menu-bar app
-creates a virtual display, streams it to a browser, and lets you **touch the
-Tesla screen to control the Mac**.
+Turn your Tesla's touchscreen — or any device with a web browser — into a
+wireless **extended monitor** for your Mac. Free, no hardware, no cables. A
+menu‑bar app creates a virtual display, streams it as **H.264** (with an MJPEG
+fallback), and lets you **touch the screen to control the Mac**.
 
-Two ways to connect:
+You connect by opening a link and typing a short **pairing code**. The code locks
+your screen to your Mac, so a stray link alone gets nobody in.
 
-- **Shared relay** *(default)* — everyone points their browser at one stable
-  link and types a **pairing code** shown on their Mac. The code locks your
-  screen to your Mac, so a stray link alone gets nobody in. Needs a small relay
-  server you host (see below).
-- **Local tunnel** — each Mac spins up its own free [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/)
-  quick tunnel. No server to host, but the link is random and changes each run.
+---
 
-## How it works
+## Try it in a few minutes (using the shared relay)
 
-macOS side (`mac/`): a menu-bar app creates a **virtual display** via Apple's
-private `CGVirtualDisplay` API (the same approach BetterDummy/FreeDisplay use),
-captures it with **ScreenCaptureKit**, and JPEG-encodes frames. In relay mode it
-opens a WebSocket to the relay and pushes frames; in local mode it serves them as
-MJPEG behind a cloudflared tunnel. Touch/scroll events come back and are posted as
-real `CGEvents`.
+The easiest path: build the app and use the relay that's already deployed at
+**`tessylink.hernandomediallc.com`** — nothing to host, no account to create. The
+app points at it by default.
 
-Relay side (`relay/`): a tiny dependency-light Node server pairs a Mac ("host")
-with browsers ("viewers") by numeric code and forwards frames one way, input the
-other. Video flows *through* the relay, so host it somewhere with real bandwidth.
-
-```
-Mac app ──frames──▶ Relay ──frames──▶ Tesla browser
-        ◀──input──       ◀──input──
-                    (paired by code)
-```
-
-## Repo layout
-
-```
-mac/               Swift menu-bar app (SwiftPM). Build with `swift build`.
-relay-cloudflare/  Relay as a Cloudflare Worker + Durable Object (recommended host).
-relay/             Same relay as a plain Node server (Render/Fly/Docker/VPS).
-```
-
-## Build the Mac app
-
-Requires macOS 13+ and Xcode command-line tools (`xcode-select --install`).
+**Requirements:** macOS 13+ and Xcode command‑line tools
+(`xcode-select --install`).
 
 ```bash
-cd mac
+git clone https://github.com/mattchernando/tessy-link.git
+cd tessy-link/mac
 swift build -c release
-./package_app.sh          # assembles a signed "Tessy Link.app"
+./package_app.sh                 # builds "Tessy Link.app"
 cp -R "Tessy Link.app" /Applications/
 open "/Applications/Tessy Link.app"
 ```
 
-First run, macOS asks for **Screen Recording** (to capture — allow, then relaunch)
-and, on your first tap, **Accessibility** (to control). Optional for local mode:
-`brew install cloudflared`.
+Then:
 
-## Deploy the relay
+1. First launch, macOS asks for **Screen Recording** — allow it, then relaunch the
+   app once (screen recording only activates after a restart). **Accessibility** is
+   requested the first time you tap, to enable touch control.
+2. Click the **display icon** in the menu bar → **Start**. It's already set to the
+   shared relay, so a **6‑digit Code** appears in the menu.
+3. In the parked Tesla — on its own internet (premium connectivity or a phone
+   hotspot) — or in any browser, open **https://tessylink.hernandomediallc.com**,
+   enter the **Code**, and drag a window onto the new display (it sits to the right
+   of your main screen).
 
-**Recommended — Cloudflare Workers + Durable Objects** (`relay-cloudflare/`):
-free plan, no egress bandwidth billing, no server to keep alive, stable URL.
+Your Code keeps your session private; everyone using the shared relay is isolated
+by their own code. Use **New code** in the menu to rotate it, and **Stop** when
+you're done.
+
+> **Heads‑up on the shared relay:** your video is relayed through the maintainer's
+> Cloudflare account and free‑tier quota. That's fine for personal use — but if you
+> use it heavily, or want guaranteed availability and privacy, **host your own**
+> (it's free too; see below) and point the app at it with **Mode ▸ Set relay URL…**.
+
+---
+
+## How it works
+
+**macOS side (`mac/`):** a menu‑bar app creates a **virtual display** via Apple's
+private `CGVirtualDisplay` API (the same approach BetterDummy/FreeDisplay use),
+captures it with **ScreenCaptureKit**, and encodes frames with **VideoToolbox
+(H.264)**. It opens a WebSocket to the relay, registers a pairing code, streams
+video out, and posts incoming touch/scroll events as real `CGEvents`.
+
+**Relay side (`relay-cloudflare/`):** a small **Cloudflare Worker + Durable
+Object** pairs a Mac ("host") with browsers ("viewers") by code, forwarding video
+one way and input the other. Video flows *through* the relay — Cloudflare doesn't
+bill egress, which is what makes a video relay free.
+
+**Browser side:** modern browsers decode the H.264 with the **WebCodecs** API and
+render to a canvas. Browsers without WebCodecs automatically fall back to **MJPEG**,
+so it still works on older Tesla MCUs.
+
+```
+Mac app ──H.264──▶ Cloudflare relay ──H.264──▶ browser (WebCodecs → canvas)
+        ◀──input──                  ◀──input──
+                     (paired by 6‑digit code)
+```
+
+---
+
+## Privacy & the pairing code
+
+The pairing code is the security boundary. A viewer must present the same code the
+host registered, and the relay refuses a second host on a code that's already in
+use. Treat the code like a short‑lived password: anyone who has your relay link
+**and** your current code can see and control your screen while a session is live.
+Rotate it with **New code**, and **Stop** the session when finished. The relay
+stores nothing — rooms vanish when both sides disconnect.
+
+---
+
+## Host your own relay (optional, free)
+
+Running your own relay gives you a private, dedicated link and your own quota.
+
+**Cloudflare Workers + Durable Objects (recommended):**
 
 ```bash
 cd relay-cloudflare
@@ -69,57 +100,68 @@ npx wrangler login
 npx wrangler deploy      # prints https://tessy-link-relay.<you>.workers.dev
 ```
 
-The rest of this section covers the Node relay (`relay/`) if you'd rather host it
-yourself. Any host that runs Node 18+ or Docker works.
+To use a custom domain you own on Cloudflare, add it under `routes` in
+`wrangler.toml` (see the example already there for `tessylink.hernandomediallc.com`).
 
-**Render** (free tier, sleeps when idle): create a new Web Service from this repo
-— it reads `relay/render.yaml`. Your link becomes `https://<name>.onrender.com`.
-
-**Fly.io**:
+**Plain Node / Docker (`relay/`)** — for Render, Fly.io, or any VPS:
 
 ```bash
 cd relay
-fly launch --copy-config --now
+npm install && npm start          # local, on :8080
+# or
+docker build -t tessy-relay . && docker run -d -p 80:8080 tessy-relay
 ```
 
-**Any VPS / Docker host**:
+Config files for Render (`render.yaml`) and Fly (`fly.toml`) are included.
 
-```bash
-cd relay
-docker build -t tessy-relay .
-docker run -d -p 80:8080 --restart unless-stopped tessy-relay
-```
+Then in the app: **Mode ▸ Set relay URL…** and paste your relay's address
+(`https://…` is converted to `wss://` automatically).
 
-> Video streaming uses real bandwidth. Free tiers are fine for light personal use;
-> a ~$5/mo VPS is the reliable option for regular use.
+---
 
-## Use it
+## Build notes
 
-1. In the app menu: **Mode ▸ Shared relay**, then **Mode ▸ Set relay URL…** and
-   paste your relay's address (`https://…` — it's converted to `wss://`).
-2. Click **Start**. The menu shows a 6-digit **Code**.
-3. In the parked Tesla (on its own internet — premium connectivity or a phone
-   hotspot), open your relay link, enter the code, and connect. Drag Mac windows
-   onto the new display; tap and scroll on the Tesla screen to control them.
+- `./package_app.sh` compiles a release build and assembles a signed
+  `Tessy Link.app` (menu‑bar only, custom icon). By default it signs **ad‑hoc**,
+  which means macOS asks for Screen Recording again after each rebuild. To make
+  permissions persist across rebuilds, sign with a stable self‑signed certificate
+  (create one in Keychain Access → Certificate Assistant, "Code Signing"), then set
+  its name in `package_app.sh`.
+- Regenerate the icon with `python3 gen_icon.py` (needs Pillow).
 
-Use **New code** any time to rotate the pairing code.
+---
 
-## Security notes
+## Menu options
 
-The pairing code gates access: a viewer must present the same code the host
-registered. Treat the code like a short-lived password — anyone who has your
-relay link *and* your current code can see and control your screen while a session
-is live. Rotate it with **New code**, and stop the session when you're done. The
-relay does not persist frames or codes; rooms vanish when both sides disconnect.
+- **Mode** — Shared relay (type a code) or Local tunnel (per‑Mac
+  [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/)),
+  plus **Set relay URL…**
+- **Resolution** — presets for common Tesla screens (streamed at ~1280px for
+  efficiency)
+- **Quality / Frame rate**, **Retina (HiDPI)**, **Touch control** toggle
+- **Code / New code**, **Show QR code**
+
+---
 
 ## Limits
 
-- The Tesla browser only runs while parked and keeps the screen awake.
-- MJPEG latency is ~150–350 ms — great for docs, email, dashboards, terminals;
-  not for video or gaming. A WebCodecs/H.264 path is a natural future upgrade.
-- No audio; DRM-protected video won't capture.
+- The Tesla browser only runs while parked, and keeps the screen awake (some
+  battery drain over long sessions).
+- Latency is low with H.264 and great for docs, dashboards, email, terminals. A
+  static screen refreshes about once a second; any motion is smooth.
+- No audio; DRM‑protected video (Netflix, etc.) won't capture.
 - The macOS virtual display uses undocumented Apple APIs; a future macOS could
   change them. The app fails gracefully if the private classes disappear.
+
+---
+
+## Repo layout
+
+```
+mac/               Swift menu-bar app (SwiftPM)
+relay-cloudflare/  Relay as a Cloudflare Worker + Durable Object (recommended host)
+relay/             Same relay as a plain Node server (Render/Fly/Docker)
+```
 
 ## License
 

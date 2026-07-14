@@ -42,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
         if let saved = defaults.string(forKey: "mode"), let m = Mode(rawValue: saved) { mode = m }
-        relayURLString = defaults.string(forKey: "relayURL") ?? ""
+        relayURLString = defaults.string(forKey: "relayURL") ?? "wss://tessylink.hernandomediallc.com/"
         sessionCode = Self.newCode()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
