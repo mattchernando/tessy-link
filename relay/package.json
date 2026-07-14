@@ -1,0 +1,15 @@
+{
+  "name": "tessy-link-relay",
+  "version": "1.0.0",
+  "description": "Relay server for Tessy Link — pairs a Mac with Tesla browsers by code and forwards video and input.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test_relay.js"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.21.1"
+  }
+}

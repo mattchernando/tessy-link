@@ -1,0 +1,17 @@
+{
+  "name": "tessy-link-relay-cloudflare",
+  "version": "1.0.0",
+  "description": "Tessy Link relay as a Cloudflare Worker + Durable Object.",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.80.0"
+  },
+  "dependencies": {
+    "ws": "^8.21.1"
+  }
+}

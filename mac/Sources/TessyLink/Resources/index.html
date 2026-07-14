@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Tessy Link</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; touch-action: none; }
+  #screen { max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: auto; }
+  #hud { position: fixed; top: 0; left: 0; right: 0; display: flex; gap: 12px;
+    align-items: center; padding: 8px 12px; font: 14px -apple-system, system-ui, sans-serif;
+    color: #eee; background: linear-gradient(#000a, #0000); transition: opacity .4s; }
+  #hud.hide { opacity: 0; pointer-events: none; }
+  #dot { width: 10px; height: 10px; border-radius: 50%; background: #e33; }
+  #dot.ok { background: #3c6; }
+  button { font: inherit; color: #eee; background: #ffffff22; border: 0; border-radius: 8px; padding: 6px 12px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <img id="screen" alt="Mac display">
+</div>
+<div id="hud">
+  <span id="dot"></span>
+  <span id="label">Connecting…</span>
+  <span style="flex:1"></span>
+  <button id="fs">Fullscreen</button>
+</div>
+<script>
+(function () {
+  var img = document.getElementById('screen');
+  var dot = document.getElementById('dot');
+  var label = document.getElementById('label');
+  var hud = document.getElementById('hud');
+  var stage = document.getElementById('stage');
+
+  // --- MJPEG video ---
+  function loadStream() { img.src = '/stream?t=' + Date.now(); }
+  img.onerror = function () { setTimeout(loadStream, 1000); };
+  loadStream();
+
+  // --- Input channel (WebSocket) ---
+  var ws = null, wsReady = false;
+  function connect() {
+    var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    ws = new WebSocket(proto + location.host + '/ws');
+    ws.onopen = function () { wsReady = true; dot.className = 'ok'; label.textContent = 'Connected'; };
+    ws.onclose = function () { wsReady = false; dot.className = ''; label.textContent = 'Reconnecting…'; setTimeout(connect, 1000); };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  }
+  connect();
+
+  function send(obj) { if (wsReady) { try { ws.send(JSON.stringify(obj)); } catch (e) {} } }
+
+  // Map a client point to normalized [0,1] coords over the displayed image.
+  function norm(clientX, clientY) {
+    var r = img.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return null;
+    var x = (clientX - r.left) / r.width;
+    var y = (clientY - r.top) / r.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    return { x: x, y: y };
+  }
+
+  var lastMove = 0;
+  function onDown(e) {
+    var p = norm(e.clientX, e.clientY); if (!p) return;
+    send({ type: 'down', x: p.x, y: p.y });
+    e.preventDefault();
+  }
+  function onMove(e) {
+    var now = Date.now(); if (now - lastMove < 33) return; lastMove = now;
+    var p = norm(e.clientX, e.clientY); if (!p) return;
+    send({ type: 'move', x: p.x, y: p.y });
+  }
+  function onUp(e) {
+    var p = norm(e.clientX, e.clientY);
+    if (p) send({ type: 'up', x: p.x, y: p.y });
+  }
+
+  // Pointer Events cover both touch and mouse on Chromium (Tesla).
+  stage.addEventListener('pointerdown', onDown, { passive: false });
+  stage.addEventListener('pointermove', onMove, { passive: true });
+  stage.addEventListener('pointerup', onUp, { passive: true });
+  stage.addEventListener('pointercancel', onUp, { passive: true });
+
+  // Scroll / wheel.
+  stage.addEventListener('wheel', function (e) {
+    var p = norm(e.clientX, e.clientY);
+    send({ type: 'scroll', x: p ? p.x : 0.5, y: p ? p.y : 0.5, dx: e.deltaX, dy: e.deltaY });
+    e.preventDefault();
+  }, { passive: false });
+
+  // Fullscreen + auto-hiding HUD.
+  document.getElementById('fs').addEventListener('click', function () {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+  });
+  var hudTimer;
+  function pokeHud() {
+    hud.classList.remove('hide');
+    clearTimeout(hudTimer);
+    hudTimer = setTimeout(function () { hud.classList.add('hide'); }, 2500);
+  }
+  document.addEventListener('pointerdown', pokeHud);
+  document.addEventListener('pointermove', pokeHud);
+  pokeHud();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Tessy Link</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;color:#eee;font-family:-apple-system,system-ui,sans-serif;-webkit-user-select:none;user-select:none;}
+  #gate{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:#0b0c0e;}
+  #gate h1{font-size:26px;margin:0;font-weight:600;}
+  #gate p{color:#8b93a0;margin:0 0 6px;}
+  #code{font-size:34px;letter-spacing:10px;text-align:center;width:260px;padding:14px;border-radius:14px;border:2px solid #2a2e35;background:#15171b;color:#fff;}
+  #go{font-size:18px;padding:12px 34px;border:0;border-radius:12px;background:#e82127;color:#fff;}
+  #err{color:#e8556b;min-height:20px;}
+  #stage{position:fixed;inset:0;display:none;align-items:center;justify-content:center;touch-action:none;}
+  #screen,#canvas{max-width:100%;max-height:100%;object-fit:contain;display:none;}
+  #dbg{display:none;position:fixed;left:0;top:0;background:#000c;color:#6f6;font:12px ui-monospace,monospace;padding:6px 8px;white-space:pre;z-index:9;max-width:100%;}
+</style>
+</head>
+<body>
+<div id="gate">
+  <h1>Tessy Link</h1>
+  <p>Enter the code shown on your Mac</p>
+  <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="––––––" autocomplete="off">
+  <button id="go">Connect</button>
+  <div id="err"></div>
+</div>
+<div id="stage">
+  <img id="screen" alt="">
+  <canvas id="canvas"></canvas>
+</div>
+<div id="dbg"></div>
+<script>
+(function(){
+  var gate=document.getElementById('gate'),stage=document.getElementById('stage'),
+      img=document.getElementById('screen'),canvas=document.getElementById('canvas'),
+      codeInput=document.getElementById('code'),err=document.getElementById('err'),dbg=document.getElementById('dbg');
+  var ws=null,ready=false,lastURL=null,activeEl=img;
+  var supportsWC=('VideoDecoder' in window && 'EncodedVideoChunk' in window);
+  var decoder=null,decoderReady=false,needKey=true,ctx=null;
+  var st={wc:supportsWC,cfg:'-',dec:'idle',rK:0,rD:0,rJ:0,drawn:0,err:''};
+  function paint(){ dbg.textContent='wc='+st.wc+' cfg='+st.cfg+' dec='+st.dec+'\nrecv K='+st.rK+' D='+st.rD+' J='+st.rJ+' drawn='+st.drawn+(st.err?('\nERR '+st.err):''); }
+  paint();
+
+  function showImg(){ if(activeEl!==img){img.style.display='block';canvas.style.display='none';activeEl=img;} }
+  function showCanvas(){ if(activeEl!==canvas){canvas.style.display='block';img.style.display='none';activeEl=canvas;} }
+
+  function connect(code){
+    var proto=location.protocol==='https:'?'wss://':'ws://';
+    ws=new WebSocket(proto+location.host+'/'); ws.binaryType='arraybuffer';
+    ws.onopen=function(){ ws.send(JSON.stringify({role:'view',code:code,h264:supportsWC})); };
+    ws.onmessage=function(ev){ if(typeof ev.data==='string'){handleText(ev.data);} else {handleBinary(ev.data);} };
+    ws.onclose=function(){ ready=false; if(stage.style.display!=='none') setTimeout(function(){connect(code);},1500); };
+    ws.onerror=function(){ try{ws.close();}catch(e){} };
+  }
+  function handleText(s){
+    var m; try{m=JSON.parse(s);}catch(e){return;}
+    if(m.type==='ready'){ gate.style.display='none';stage.style.display='flex';ready=true; }
+    else if(m.type==='error'){ err.textContent=(m.error==='bad-code')?'Invalid code.':'That code is not available.'; }
+    else if(m.type==='video-config'){ st.cfg=m.codec; paint(); setupDecoder(m.codec,m.w,m.h); }
+  }
+  function setupDecoder(codec,w,h){
+    if(!supportsWC){ st.dec='no-webcodecs'; paint(); return; }
+    canvas.width=w; canvas.height=h; ctx=canvas.getContext('2d');
+    var cfg={codec:codec,optimizeForLatency:true,codedWidth:w,codedHeight:h};
+    function build(){
+      try{
+        decoder=new VideoDecoder({
+          output:function(frame){ try{ctx.drawImage(frame,0,0,canvas.width,canvas.height);}catch(e){st.err='draw '+e;} frame.close(); st.drawn++; showCanvas(); paint(); },
+          error:function(e){ st.err='dec '+(e&&e.message||e); needKey=true; paint(); }
+        });
+        decoder.configure(cfg); decoderReady=true; needKey=true; st.dec='ready'; paint();
+      }catch(e){ st.dec='cfg-fail'; st.err=''+e; paint(); requestMjpeg(); }
+    }
+    st.dec='checking'; paint();
+    if(VideoDecoder.isConfigSupported){
+      VideoDecoder.isConfigSupported(cfg).then(function(res){ if(res&&res.supported){build();} else {st.dec='unsupported';paint();requestMjpeg();} }).catch(function(e){st.dec='isupp-err';st.err=''+e;paint();requestMjpeg();});
+    } else { build(); }
+  }
+  function requestMjpeg(){ decoderReady=false; try{ws.send(JSON.stringify({type:'downgrade'}));}catch(e){} }
+
+  function handleBinary(buf){
+    var u8=new Uint8Array(buf), t=u8[0];
+    if(t===0x4A){ st.rJ++; var url=URL.createObjectURL(new Blob([u8.subarray(1)],{type:'image/jpeg'}));
+      img.onload=function(){ if(lastURL)URL.revokeObjectURL(lastURL); lastURL=url; }; img.src=url; showImg(); paint(); }
+    else if(t===0x4B||t===0x44){ var isKey=(t===0x4B); if(isKey)st.rK++; else st.rD++;
+      if(!decoderReady){ paint(); return; }
+      if(needKey&&!isKey){ paint(); return; }
+      if(isKey) needKey=false;
+      var ts=0; for(var i=1;i<=8;i++){ ts=ts*256+u8[i]; }
+      try{ decoder.decode(new EncodedVideoChunk({type:isKey?'key':'delta',timestamp:ts,data:u8.subarray(9)})); }
+      catch(e){ st.err='chunk '+e; needKey=true; } paint(); }
+  }
+
+  document.getElementById('go').addEventListener('click',function(){
+    var code=(codeInput.value||'').replace(/[^0-9]/g,''); if(code.length<4){err.textContent='Enter the 6-digit code.';return;}
+    err.textContent=''; connect(code);
+  });
+  codeInput.addEventListener('keydown',function(e){ if(e.key==='Enter') document.getElementById('go').click(); });
+
+  function send(o){ if(ready&&ws&&ws.readyState===1){ try{ws.send(JSON.stringify(o));}catch(e){} } }
+  function norm(cx,cy){ var r=activeEl.getBoundingClientRect(); if(!r.width||!r.height)return null; var x=(cx-r.left)/r.width,y=(cy-r.top)/r.height; if(x<0||x>1||y<0||y>1)return null; return {x:x,y:y}; }
+  var lastMove=0;
+  stage.addEventListener('pointerdown',function(e){var p=norm(e.clientX,e.clientY);if(p){send({type:'down',x:p.x,y:p.y});e.preventDefault();}},{passive:false});
+  stage.addEventListener('pointermove',function(e){var n=Date.now();if(n-lastMove<33)return;lastMove=n;var p=norm(e.clientX,e.clientY);if(p)send({type:'move',x:p.x,y:p.y});},{passive:true});
+  stage.addEventListener('pointerup',function(e){var p=norm(e.clientX,e.clientY);if(p)send({type:'up',x:p.x,y:p.y});},{passive:true});
+  stage.addEventListener('wheel',function(e){var p=norm(e.clientX,e.clientY);send({type:'scroll',x:p?p.x:0.5,y:p?p.y:0.5,dx:e.deltaX,dy:e.deltaY});e.preventDefault();},{passive:false});
+})();
+</script>
+</body>
+</html>

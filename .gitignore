@@ -1,0 +1,17 @@
+# Swift / Xcode
+mac/.build/
+mac/.swiftpm/
+mac/*.xcodeproj
+mac/DerivedData/
+mac/AppIcon.iconset/
+
+# built app bundles
+**/Tessy Link.app/
+
+# Node / Wrangler
+**/node_modules/
+**/.wrangler/
+
+# misc
+.DS_Store
+*.log

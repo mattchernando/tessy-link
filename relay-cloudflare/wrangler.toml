@@ -1,0 +1,23 @@
+name = "tessy-link-relay"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+# Serve the receiver page (src/index.html) as an imported text module.
+rules = [
+  { type = "Text", globs = ["**/*.html"] }
+]
+
+# Custom domain — the zone hernandomediallc.com is on this Cloudflare account,
+# so Wrangler creates the DNS record + cert automatically on deploy.
+routes = [
+  { pattern = "tessylink.hernandomediallc.com", custom_domain = true }
+]
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "Relay"
+
+# SQLite-backed Durable Object — required to run on the Workers Free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Relay"]

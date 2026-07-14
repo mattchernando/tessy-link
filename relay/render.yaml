@@ -1,0 +1,12 @@
+# One-click deploy on Render (https://render.com). Point Render at this repo;
+# it reads this file. Free plan works for light use (the service sleeps when
+# idle and cold-starts on the next connection).
+services:
+  - type: web
+    name: tessy-link-relay
+    runtime: node
+    rootDir: relay
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /healthz
