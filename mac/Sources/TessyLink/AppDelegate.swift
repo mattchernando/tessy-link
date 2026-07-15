@@ -28,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastVideoConfig: String?
     private var currentStreamW = 0
     private var currentStreamH = 0
+    private var viewportApplied = false
+    private var viewportWork: DispatchWorkItem?
 
     private var statusItem: NSStatusItem!
     private var virtualDisplay: TLVirtualDisplay?
@@ -81,6 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         capturer.targetFPS = fps
         capturer.mode = .jpeg
         lastVideoConfig = nil
+        viewportApplied = false
+        viewportWork?.cancel()
 
         switch mode {
         case .relay:
@@ -144,19 +148,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Resize the virtual display to match the viewer's screen shape (fill, no bars).
+    /// Fit the display to the viewer's screen ONCE per session. Debounced so a
+    /// fluctuating viewport (address bar hiding, brief reflows) can't cause the
+    /// display to thrash-resize. Stop/Start or "New code" re-arms it.
     private func applyViewport(_ vw: Int, _ vh: Int) {
-        guard virtualDisplay != nil, mode == .relay, autoFit, vw > 100, vh > 100 else { return }
-        let (w, h) = fittedSize(vw, vh)
-        if currentStreamW > 0 {
-            let cur = Double(currentStreamW) / Double(currentStreamH)
-            let neu = Double(w) / Double(h)
-            if abs(neu - cur) / cur < 0.03 && abs(w - currentStreamW) < 48 { return }
+        guard virtualDisplay != nil, mode == .relay, autoFit, !viewportApplied, vw > 100, vh > 100 else { return }
+        viewportWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.viewportApplied, self.virtualDisplay != nil else { return }
+            self.viewportApplied = true
+            let (w, h) = self.fittedSize(vw, vh)
+            if self.currentStreamW > 0 {
+                let cur = Double(self.currentStreamW) / Double(self.currentStreamH)
+                let neu = Double(w) / Double(h)
+                if abs(neu - cur) / cur < 0.04 && abs(w - self.currentStreamW) < 60 { return }
+            }
+            self.lastVideoConfig = nil
+            self.stopDisplayAndCapture()
+            self.startDisplayAndCapture(width: w, height: h)
+            self.statusText = "Fitted \(w)×\(h)"
+            self.rebuildMenu()
         }
-        lastVideoConfig = nil
-        stopDisplayAndCapture()
-        startDisplayAndCapture(width: w, height: h)
-        statusText = "Fitted \(w)×\(h)"
-        rebuildMenu()
+        viewportWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
     }
 
     private func stopSession() {
