@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastVideoConfig: String?
     private var currentStreamW = 0
     private var currentStreamH = 0
-    private var viewportApplied = false
+    private var lastFitTime = Date.distantPast
     private var viewportWork: DispatchWorkItem?
 
     private var statusItem: NSStatusItem!
@@ -83,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         capturer.targetFPS = fps
         capturer.mode = .jpeg
         lastVideoConfig = nil
-        viewportApplied = false
+        lastFitTime = .distantPast
         viewportWork?.cancel()
 
         switch mode {
@@ -148,21 +148,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Resize the virtual display to match the viewer's screen shape (fill, no bars).
-    /// Fit the display to the viewer's screen ONCE per session. Debounced so a
-    /// fluctuating viewport (address bar hiding, brief reflows) can't cause the
-    /// display to thrash-resize. Stop/Start or "New code" re-arms it.
+    /// Fit the display to the viewer's screen. Re-fits when the shape changes
+    /// meaningfully (e.g. half-screen <-> full-screen), debounced against brief
+    /// flickers and rate-limited by a cooldown so it can't thrash-resize.
     private func applyViewport(_ vw: Int, _ vh: Int) {
-        guard virtualDisplay != nil, mode == .relay, autoFit, !viewportApplied, vw > 100, vh > 100 else { return }
+        guard virtualDisplay != nil, mode == .relay, autoFit, vw > 100, vh > 100 else { return }
         viewportWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.viewportApplied, self.virtualDisplay != nil else { return }
-            self.viewportApplied = true
+            guard let self, self.virtualDisplay != nil else { return }
             let (w, h) = self.fittedSize(vw, vh)
             if self.currentStreamW > 0 {
                 let cur = Double(self.currentStreamW) / Double(self.currentStreamH)
                 let neu = Double(w) / Double(h)
-                if abs(neu - cur) / cur < 0.04 && abs(w - self.currentStreamW) < 60 { return }
+                let aspectClose = abs(neu - cur) / cur < 0.06
+                let sizeClose = abs(w - self.currentStreamW) < 64 && abs(h - self.currentStreamH) < 64
+                if aspectClose && sizeClose { return }              // not a meaningful change
+                if Date().timeIntervalSince(self.lastFitTime) < 5 { return }   // cooldown, anti-thrash
             }
+            self.lastFitTime = Date()
             self.lastVideoConfig = nil
             self.stopDisplayAndCapture()
             self.startDisplayAndCapture(width: w, height: h)
@@ -170,7 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.rebuildMenu()
         }
         viewportWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
     private func stopSession() {
