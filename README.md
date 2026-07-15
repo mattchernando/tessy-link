@@ -3,7 +3,7 @@
 Turn your Tesla's touchscreen — or any device with a web browser — into a
 wireless **extended monitor** for your Mac. Free, no hardware, no cables. A
 menu‑bar app creates a virtual display, streams it as **H.264** (with an MJPEG
-fallback), and lets you **touch the screen to control the Mac**.
+fallback), and lets you **touch the screen to control the Mac**, and automatically **fits the display to your Tesla's screen** (no black bars).
 
 You connect by opening a link and typing a short **pairing code**. The code locks
 your screen to your Mac, so a stray link alone gets nobody in.
@@ -59,7 +59,7 @@ Then:
    app once (screen recording only activates after a restart). **Accessibility** is
    requested the first time you tap, to enable touch control.
 2. Click the **display icon** in the menu bar → **Start**. It's already set to the
-   shared relay, so a **6‑digit Code** appears in the menu.
+   shared relay, so a **8‑digit Code** appears in the menu.
 3. In the parked Tesla — on its own internet (premium connectivity or a phone
    hotspot) — or in any browser, open **https://tessylink.hernandomediallc.com**,
    enter the **Code**, and drag a window onto the new display (it sits to the right
@@ -91,12 +91,15 @@ bill egress, which is what makes a video relay free.
 
 **Browser side:** modern browsers decode the H.264 with the **WebCodecs** API and
 render to a canvas. Browsers without WebCodecs automatically fall back to **MJPEG**,
-so it still works on older Tesla MCUs.
+so it still works on older Tesla MCUs. The receiver reports its viewport size and
+the app resizes the virtual display to match — filling the screen with no
+letterboxing, and re‑fitting when you switch the browser between half‑ and
+full‑screen.
 
 ```
 Mac app ──H.264──▶ Cloudflare relay ──H.264──▶ browser (WebCodecs → canvas)
         ◀──input──                  ◀──input──
-                     (paired by 6‑digit code)
+                     (paired by 8‑digit code)
 ```
 
 ---
@@ -109,6 +112,10 @@ use. Treat the code like a short‑lived password: anyone who has your relay lin
 **and** your current code can see and control your screen while a session is live.
 Rotate it with **New code**, and **Stop** the session when finished. The relay
 stores nothing — rooms vanish when both sides disconnect.
+
+The relay is hardened against code guessing: **8‑digit codes**, **per‑IP rate
+limiting**, and viewer/room caps. Injected touch input is **clamped to the virtual
+display**, so a viewer can't reach the rest of your Mac.
 
 ---
 
@@ -161,10 +168,14 @@ Then in the app: **Mode ▸ Set relay URL…** and paste your relay's address
 - **Mode** — Shared relay (type a code) or Local tunnel (per‑Mac
   [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/)),
   plus **Set relay URL…**
-- **Resolution** — presets for common Tesla screens (streamed at ~1280px for
-  efficiency)
-- **Quality / Frame rate**, **Retina (HiDPI)**, **Touch control** toggle
-- **Code / New code**, **Show QR code**
+- **Auto‑fit to viewer's screen** — on by default; resizes the display to the
+  Tesla's shape so it fills edge‑to‑edge (re‑fits on half↔full changes)
+- **Resolution** — a starting size, used until the Tesla reports its screen;
+  streamed at up to ~1440px for efficiency
+- **Touch control** — enable/disable input from the browser
+- **Quality / Frame rate**
+- **Code / New code** — the 8‑digit pairing code (**New code** rotates it)
+- **Show QR code**
 
 ---
 
