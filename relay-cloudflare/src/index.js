@@ -11,6 +11,9 @@ export default {
       return env.RELAY.get(id).fetch(request);
     }
     const url = new URL(request.url);
+    if (url.pathname === "/install") {
+      return Response.redirect("https://raw.githubusercontent.com/mattchernando/tessy-link/main/install.sh", 302);
+    }
     if (url.pathname === "/healthz") return new Response("ok");
     return new Response(PAGE_HTML, {
       headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },

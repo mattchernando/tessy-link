@@ -10,7 +10,32 @@ your screen to your Mac, so a stray link alone gets nobody in.
 
 ---
 
-## Try it in a few minutes (using the shared relay)
+## Install (macOS — no build needed)
+
+Paste this into Terminal:
+
+```bash
+curl -fsSL https://tessylink.hernandomediallc.com/install | bash
+```
+
+It downloads the latest app, installs it to Applications, clears the download
+quarantine (so there's no "unidentified developer" wall), and launches it. Then:
+
+1. Click the menu‑bar **display icon** → **Start**, and allow **Screen Recording**
+   (the app relaunches once for it to take effect).
+2. Open **https://tessylink.hernandomediallc.com**, enter the **Code** shown in the
+   menu, and drag a window onto the new display (to the right of your main screen).
+
+That's the whole thing. Your Code keeps your session private.
+
+> First launch alternative: if you'd rather not run a script, download
+> `Tessy-Link.zip` from [Releases](https://github.com/mattchernando/tessy-link/releases/latest),
+> unzip it, right‑click **Tessy Link.app** → **Open** (once) to get past Gatekeeper,
+> and drag it to Applications.
+
+---
+
+## Build from source (optional)
 
 The easiest path: build the app and use the relay that's already deployed at
 **`tessylink.hernandomediallc.com`** — nothing to host, no account to create. The
