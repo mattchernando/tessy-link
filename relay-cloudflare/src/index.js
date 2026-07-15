@@ -24,6 +24,7 @@ export default {
 export class Relay {
   constructor(state, env) {
     this.rooms = new Map(); // code -> { host: ws|null, viewers: Set<ws> }
+    this.ipHits = new Map(); // ip -> timestamps (rate limiting)
   }
   getRoom(code) {
     let r = this.rooms.get(code);
@@ -35,17 +36,22 @@ export class Relay {
     const pair = new WebSocketPair();
     const client = pair[0], server = pair[1];
     server.accept();
-    const conn = { role: null, code: null };
+    const conn = { role: null, code: null, ip: request.headers.get("CF-Connecting-IP") || "?" };
     const send = (ws, obj) => { try { ws.send(JSON.stringify(obj)); } catch {} };
 
     server.addEventListener("message", (ev) => {
       const data = ev.data;
       if (conn.role === null) {
+        const now = Date.now();
+        let hits = (this.ipHits.get(conn.ip) || []).filter((t) => now - t < 60000);
+        if (hits.length >= 40) { send(server, { type: "error", error: "rate" }); server.close(); return; }
+        hits.push(now); this.ipHits.set(conn.ip, hits);
         let msg;
         try { msg = JSON.parse(typeof data === "string" ? data : ""); } catch { server.close(); return; }
         const code = String((msg && msg.code) || "").trim();
-        if (!/^[0-9]{4,8}$/.test(code)) { send(server, { type: "error", error: "bad-code" }); server.close(); return; }
+        if (!/^[0-9]{6,10}$/.test(code)) { send(server, { type: "error", error: "bad-code" }); server.close(); return; }
         conn.code = code;
+        if (!this.rooms.has(code) && this.rooms.size >= 500) { send(server, { type: "error", error: "busy" }); server.close(); return; }
         const room = this.getRoom(code);
         if (msg.role === "host") {
           if (room.host) { send(server, { type: "error", error: "code-in-use" }); server.close(); return; }
@@ -54,6 +60,7 @@ export class Relay {
           // Tell the host about any viewers already waiting (and their caps).
           for (const v of room.viewers) send(server, { type: "viewer-joined", h264: !!v._h264 });
         } else if (msg.role === "view") {
+          if (room.viewers.size >= 8) { send(server, { type: "error", error: "full" }); server.close(); return; }
           conn.role = "view"; server._h264 = msg.h264 === true;
           room.viewers.add(server);
           const hostPresent = !!room.host;

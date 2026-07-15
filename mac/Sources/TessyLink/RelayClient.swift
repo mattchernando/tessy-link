@@ -19,6 +19,8 @@ final class RelayClient: NSObject, URLSessionWebSocketDelegate {
     var onStatus: ((String) -> Void)?
     /// Called when a viewer joins, with whether it supports H.264/WebCodecs.
     var onViewerJoined: ((Bool) -> Void)?
+    /// Called when a viewer reports its display size (for fit-to-screen).
+    var onViewport: ((Int, Int) -> Void)?
 
     init(urlString: String, code: String) {
         self.urlString = urlString
@@ -98,6 +100,10 @@ final class RelayClient: NSObject, URLSessionWebSocketDelegate {
             onViewerJoined?(h264)
         case "viewer-left":
             onStatus?("Tesla disconnected")
+        case "viewport":
+            let w = (obj["w"] as? Int) ?? Int((obj["w"] as? Double) ?? 0)
+            let h = (obj["h"] as? Int) ?? Int((obj["h"] as? Double) ?? 0)
+            if w > 0 && h > 0 { onViewport?(w, h) }
         case "downgrade":
             onStatus?("Tesla needs MJPEG")
             onViewerJoined?(false)

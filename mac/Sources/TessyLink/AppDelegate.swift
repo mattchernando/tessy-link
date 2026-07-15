@@ -8,13 +8,14 @@ enum Mode: String { case relay; case local }
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let presets: [Preset] = [
+        Preset(name: "Auto-fit to screen", width: 1600, height: 1000),
         Preset(name: "Tesla 3/Y · 1920×1200", width: 1920, height: 1200),
         Preset(name: "Tesla S/X (2021+) · 2200×1300", width: 2200, height: 1300),
-        Preset(name: "Tesla S/X portrait · 1200×1920", width: 1200, height: 1920),
         Preset(name: "16:9 · 1600×900", width: 1600, height: 900),
         Preset(name: "16:10 · 1280×800", width: 1280, height: 800)
     ]
     private var selectedPreset = 0
+    private var autoFit = true
     private var hiDPI = false
     private var inputEnabled = true
     private var jpegQuality: CGFloat = 0.5
@@ -23,8 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var mode: Mode = .relay
     private var relayURLString = ""
-    private var sessionCode = "000000"
+    private var sessionCode = "00000000"
     private var lastVideoConfig: String?
+    private var currentStreamW = 0
+    private var currentStreamH = 0
 
     private var statusItem: NSStatusItem!
     private var virtualDisplay: TLVirtualDisplay?
@@ -37,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusText = ""
     private var qrWindow: NSWindow?
 
-    private var running: Bool { virtualDisplay != nil }
+    private var running: Bool { virtualDisplay != nil || relay != nil || server != nil }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
@@ -49,37 +52,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = NSImage(systemSymbolName: "display", accessibilityDescription: "Tessy Link")
         }
         rebuildMenu()
+        // Headless autostart for testing: --start <code>
+        if let i = CommandLine.arguments.firstIndex(of: "--start"), CommandLine.arguments.count > i + 1 {
+            sessionCode = CommandLine.arguments[i + 1]
+            startSession()
+        }
     }
 
-    private static func newCode() -> String { String(format: "%06d", Int.random(in: 0...999999)) }
+    private static func newCode() -> String { String(format: "%08d", Int.random(in: 0...99_999_999)) }
 
-    private func streamSize(_ w: Int, _ h: Int, maxDim: Int = 1280) -> (Int, Int) {
-        let m = max(w, h)
-        guard m > maxDim else { return (w, h) }
-        let scale = Double(maxDim) / Double(m)
-        var nw = Int((Double(w) * scale).rounded())
-        var nh = Int((Double(h) * scale).rounded())
-        if nw % 2 != 0 { nw -= 1 }
-        if nh % 2 != 0 { nh -= 1 }
-        return (nw, nh)
+    /// Fit an arbitrary width/height into a stream size (aspect preserved, even, capped).
+    private func fittedSize(_ vw: Int, _ vh: Int) -> (Int, Int) {
+        let maxSide = 1440.0
+        let scale = min(1.0, maxSide / Double(max(vw, vh)))
+        var w = Int((Double(vw) * scale).rounded())
+        var h = Int((Double(vh) * scale).rounded())
+        if w % 2 != 0 { w -= 1 }
+        if h % 2 != 0 { h -= 1 }
+        return (max(320, w), max(240, h))
     }
+
+    // MARK: - Session lifecycle
 
     private func startSession() {
         if mode == .relay && relayURLString.isEmpty { alert("Set your relay URL first: Mode ▸ Set relay URL…"); return }
-        let preset = presets[selectedPreset]
-        guard let vd = TLVirtualDisplay(width: UInt32(preset.width), height: UInt32(preset.height), hiDPI: hiDPI, name: "Tessy Link Display") else {
-            alert("Couldn’t create the virtual display."); return
-        }
-        virtualDisplay = vd
-        input.displayID = vd.displayID
         input.enabled = inputEnabled
         capturer.jpegQuality = jpegQuality
         capturer.targetFPS = fps
         capturer.mode = .jpeg
         lastVideoConfig = nil
-
-        let (sw, sh) = streamSize(preset.width, preset.height)
-        NSLog("[TessyLink] session start mode=\(mode.rawValue) code=\(sessionCode) stream=\(sw)x\(sh)")
 
         switch mode {
         case .relay:
@@ -92,10 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.capturer.mode = .h264
                     if let cfg = self.lastVideoConfig { self.relay?.sendText(cfg) }
                     self.capturer.requestKeyframe()
-                } else {
-                    self.capturer.mode = .jpeg
-                }
+                } else { self.capturer.mode = .jpeg }
             }
+            relay.onViewport = { [weak self] w, h in DispatchQueue.main.async { self?.applyViewport(w, h) } }
             relay.start()
             self.relay = relay
             capturer.onVideoConfig = { [weak self] codec, w, h in
@@ -119,31 +119,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             tunnel.start(localPort: port)
         }
 
-        capturer.start(displayID: vd.displayID, width: sw, height: sh)
+        let preset = presets[selectedPreset]
+        let (sw, sh) = fittedSize(preset.width, preset.height)
+        startDisplayAndCapture(width: sw, height: sh)
+        rebuildMenu()
+    }
+
+    private func startDisplayAndCapture(width: Int, height: Int) {
+        guard let vd = TLVirtualDisplay(width: UInt32(width), height: UInt32(height), hiDPI: hiDPI, name: "Tessy Link Display") else {
+            alert("Couldn’t create the virtual display."); return
+        }
+        virtualDisplay = vd
+        input.displayID = vd.displayID
+        currentStreamW = width; currentStreamH = height
+        capturer.start(displayID: vd.displayID, width: width, height: height)
+        capturer.requestKeyframe()
+        NSLog("[TessyLink] display+capture at \(width)x\(height) code=\(sessionCode)")
+    }
+
+    private func stopDisplayAndCapture() {
+        capturer.stop()
+        virtualDisplay = nil
+        currentStreamW = 0; currentStreamH = 0
+    }
+
+    /// Resize the virtual display to match the viewer's screen shape (fill, no bars).
+    private func applyViewport(_ vw: Int, _ vh: Int) {
+        guard virtualDisplay != nil, mode == .relay, autoFit, vw > 100, vh > 100 else { return }
+        let (w, h) = fittedSize(vw, vh)
+        if currentStreamW > 0 {
+            let cur = Double(currentStreamW) / Double(currentStreamH)
+            let neu = Double(w) / Double(h)
+            if abs(neu - cur) / cur < 0.03 && abs(w - currentStreamW) < 48 { return }
+        }
+        lastVideoConfig = nil
+        stopDisplayAndCapture()
+        startDisplayAndCapture(width: w, height: h)
+        statusText = "Fitted \(w)×\(h)"
         rebuildMenu()
     }
 
     private func stopSession() {
-        capturer.stop()
+        stopDisplayAndCapture()
         relay?.stop(); relay = nil
         server?.stop(); server = nil
         tunnel.stop()
         publicURL = nil
         statusText = ""
         lastVideoConfig = nil
-        virtualDisplay = nil
         closeQRWindow()
         rebuildMenu()
     }
 
     private func restartIfRunning() { if running { stopSession(); startSession() } }
 
+    // MARK: - Menu
+
     private func rebuildMenu() {
         let menu = NSMenu()
-        let stateLine = running ? "Streaming · \(presets[selectedPreset].width)×\(presets[selectedPreset].height)" : "Stopped"
-        let header = NSMenuItem(title: "Tessy Link — \(stateLine)", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
+        let sizeStr = currentStreamW > 0 ? "\(currentStreamW)×\(currentStreamH)" : "\(presets[selectedPreset].width)×\(presets[selectedPreset].height)"
+        let header = NSMenuItem(title: "Tessy Link — \(running ? "Streaming · \(sizeStr)" : "Stopped")", action: nil, keyEquivalent: "")
+        header.isEnabled = false; menu.addItem(header)
         if running && !statusText.isEmpty {
             let s = NSMenuItem(title: "   \(statusText)", action: nil, keyEquivalent: ""); s.isEnabled = false; menu.addItem(s)
         }
@@ -159,15 +195,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let localMode = NSMenuItem(title: "Local tunnel (this Mac)", action: #selector(setLocalMode), keyEquivalent: "")
         localMode.target = self; localMode.state = (mode == .local) ? .on : .off; modeMenu.addItem(localMode)
         modeMenu.addItem(.separator())
-        let setURL = NSMenuItem(title: "Set relay URL…", action: #selector(setRelayURL), keyEquivalent: "")
-        setURL.target = self; modeMenu.addItem(setURL)
+        let setURL = NSMenuItem(title: "Set relay URL…", action: #selector(setRelayURL), keyEquivalent: ""); setURL.target = self; modeMenu.addItem(setURL)
         modeItem.submenu = modeMenu; menu.addItem(modeItem)
 
         menu.addItem(.separator())
 
         if mode == .relay {
-            let urlTitle = relayURLString.isEmpty ? "Relay: (not set)" : "Relay: \(httpFromWS(relayURLString))"
-            let urlItem = NSMenuItem(title: urlTitle, action: #selector(copyRelayURL), keyEquivalent: ""); urlItem.target = self; menu.addItem(urlItem)
+            let urlItem = NSMenuItem(title: relayURLString.isEmpty ? "Relay: (not set)" : "Relay: \(httpFromWS(relayURLString))", action: #selector(copyRelayURL), keyEquivalent: ""); urlItem.target = self; menu.addItem(urlItem)
             let codeItem = NSMenuItem(title: "Code: \(sessionCode)", action: #selector(copyCode), keyEquivalent: ""); codeItem.target = self; menu.addItem(codeItem)
             let newCode = NSMenuItem(title: "New code", action: #selector(regenerateCode), keyEquivalent: ""); newCode.target = self; menu.addItem(newCode)
             let qr = NSMenuItem(title: "Show QR code", action: #selector(showQR), keyEquivalent: ""); qr.target = self; qr.isEnabled = !relayURLString.isEmpty; menu.addItem(qr)
@@ -183,6 +217,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        let fitItem = NSMenuItem(title: "Auto-fit to viewer's screen", action: #selector(toggleAutoFit), keyEquivalent: "")
+        fitItem.target = self; fitItem.state = autoFit ? .on : .off; menu.addItem(fitItem)
+
         let resItem = NSMenuItem(title: "Resolution", action: nil, keyEquivalent: "")
         let resMenu = NSMenu()
         for (i, preset) in presets.enumerated() {
@@ -190,9 +227,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.target = self; item.tag = i; item.state = (i == selectedPreset) ? .on : .off; resMenu.addItem(item)
         }
         resItem.submenu = resMenu; menu.addItem(resItem)
-
-        let hidpiItem = NSMenuItem(title: "Retina (HiDPI) display", action: #selector(toggleHiDPI), keyEquivalent: "")
-        hidpiItem.target = self; hidpiItem.state = hiDPI ? .on : .off; menu.addItem(hidpiItem)
 
         let touchItem = NSMenuItem(title: "Touch control (Tesla → Mac)", action: #selector(toggleInput), keyEquivalent: "")
         touchItem.target = self; touchItem.state = inputEnabled ? .on : .off; menu.addItem(touchItem)
@@ -221,9 +255,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
+    // MARK: - Actions
+
     @objc private func toggleRunning() { running ? stopSession() : startSession() }
     @objc private func setRelayMode() { mode = .relay; UserDefaults.standard.set(mode.rawValue, forKey: "mode"); restartIfRunning(); rebuildMenu() }
     @objc private func setLocalMode() { mode = .local; UserDefaults.standard.set(mode.rawValue, forKey: "mode"); restartIfRunning(); rebuildMenu() }
+    @objc private func toggleAutoFit() { autoFit.toggle(); rebuildMenu() }
     @objc private func setRelayURL() {
         let current = relayURLString.isEmpty ? "wss://" : relayURLString
         if let entered = promptForText(title: "Relay URL", message: "Enter your relay's WebSocket URL (wss://…)", value: current) {
@@ -235,7 +272,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func regenerateCode() { sessionCode = Self.newCode(); restartIfRunning(); rebuildMenu() }
     @objc private func selectPreset(_ sender: NSMenuItem) { selectedPreset = sender.tag; restartIfRunning(); rebuildMenu() }
-    @objc private func toggleHiDPI() { hiDPI.toggle(); restartIfRunning(); rebuildMenu() }
     @objc private func toggleInput() { inputEnabled.toggle(); input.enabled = inputEnabled; rebuildMenu() }
     @objc private func selectQuality(_ sender: NSMenuItem) { if let v = sender.representedObject as? CGFloat { jpegQuality = v; capturer.jpegQuality = v }; rebuildMenu() }
     @objc private func selectFPS(_ sender: NSMenuItem) { if let v = sender.representedObject as? Double { fps = v; capturer.targetFPS = v }; rebuildMenu() }

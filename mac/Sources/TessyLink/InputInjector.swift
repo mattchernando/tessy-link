@@ -16,8 +16,8 @@ final class InputInjector {
         guard enabled, let type = event["type"] as? String else { return }
 
         let bounds = CGDisplayBounds(displayID)
-        let nx = (event["x"] as? Double) ?? 0
-        let ny = (event["y"] as? Double) ?? 0
+        let nx = min(1.0, max(0.0, (event["x"] as? Double) ?? 0))
+        let ny = min(1.0, max(0.0, (event["y"] as? Double) ?? 0))
         let point = CGPoint(x: bounds.origin.x + nx * bounds.size.width,
                             y: bounds.origin.y + ny * bounds.size.height)
 

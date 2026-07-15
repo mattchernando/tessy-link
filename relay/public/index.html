@@ -55,7 +55,7 @@
   }
   function handleText(s){
     var m; try{m=JSON.parse(s);}catch(e){return;}
-    if(m.type==='ready'){ gate.style.display='none';stage.style.display='flex';ready=true; }
+    if(m.type==='ready'){ gate.style.display='none';stage.style.display='flex';ready=true; reportViewport(); }
     else if(m.type==='error'){ err.textContent=(m.error==='bad-code')?'Invalid code.':'That code is not available.'; }
     else if(m.type==='video-config'){ st.cfg=m.codec; paint(); setupDecoder(m.codec,m.w,m.h); }
   }
@@ -93,7 +93,7 @@
   }
 
   document.getElementById('go').addEventListener('click',function(){
-    var code=(codeInput.value||'').replace(/[^0-9]/g,''); if(code.length<4){err.textContent='Enter the 6-digit code.';return;}
+    var code=(codeInput.value||'').replace(/[^0-9]/g,''); if(code.length<6){err.textContent='Enter the code shown on your Mac.';return;}
     err.textContent=''; connect(code);
   });
   codeInput.addEventListener('keydown',function(e){ if(e.key==='Enter') document.getElementById('go').click(); });
@@ -105,6 +105,15 @@
   stage.addEventListener('pointermove',function(e){var n=Date.now();if(n-lastMove<33)return;lastMove=n;var p=norm(e.clientX,e.clientY);if(p)send({type:'move',x:p.x,y:p.y});},{passive:true});
   stage.addEventListener('pointerup',function(e){var p=norm(e.clientX,e.clientY);if(p)send({type:'up',x:p.x,y:p.y});},{passive:true});
   stage.addEventListener('wheel',function(e){var p=norm(e.clientX,e.clientY);send({type:'scroll',x:p?p.x:0.5,y:p?p.y:0.5,dx:e.deltaX,dy:e.deltaY});e.preventDefault();},{passive:false});
+
+  function reportViewport(){
+    if(!ready||!ws||ws.readyState!==1)return;
+    var dpr=window.devicePixelRatio||1;
+    var w=Math.round((window.innerWidth||document.documentElement.clientWidth)*dpr);
+    var h=Math.round((window.innerHeight||document.documentElement.clientHeight)*dpr);
+    if(w>0&&h>0){ try{ws.send(JSON.stringify({type:'viewport',w:w,h:h}));}catch(e){} }
+  }
+  var vpT; window.addEventListener('resize',function(){clearTimeout(vpT);vpT=setTimeout(reportViewport,400);});
 })();
 </script>
 </body>
